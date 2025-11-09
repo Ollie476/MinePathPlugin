@@ -1,8 +1,8 @@
 name: MinePath
-version: '1.0-SNAPSHOT'
+version: '1.0'
 main: ollie.minePath.MinePath
 api-version: '1.21'
 commands:
   minepath:
-    description: Controls snapshot delay
-    usage: /minepath
+    description: Controls minepath recorder
+    usage: /minepath <start|stop|get|set_delay|reset>
