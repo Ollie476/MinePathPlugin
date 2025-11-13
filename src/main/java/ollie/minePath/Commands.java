@@ -8,7 +8,6 @@ import org.bukkit.entity.Player;
 
 import java.io.IOException;
 
-
 public class Commands implements CommandExecutor {
     private final MinePath plugin;
 
@@ -19,6 +18,8 @@ public class Commands implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (sender instanceof Player commandSender) {
+            if (!sender.isOp())
+                return true;
             switch (args[0]) {
                 case "set_delay":
                     plugin.setDelay(commandSender, args[1]);
@@ -45,7 +46,7 @@ public class Commands implements CommandExecutor {
                     break;
                 case "reset":
                     try {
-                        plugin.clearPlayerDataFile();
+                        plugin.resetRecordingFile();
                     } catch (IOException ignored) {}
                     break;
             }
