@@ -1,7 +1,7 @@
 package ollie.minePath;
 
 import org.bukkit.*;
-import org.bukkit.block.Block;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
@@ -9,32 +9,31 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.Team;
 
 import java.io.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
-record BlockInfo(int id, int y) {}
+record BlockInfo(BlockData data, int y) {}
 
 public final class MinePath extends JavaPlugin {
     public long snapshotDelay;
     public long snapshotIndex;
 
     private final String recordingDataPath = "recording_data.csv";
-    private final List<Location> playerLocations = new ArrayList<>();
+    private final Map<UUID, Integer> uuidMap = new HashMap<>();
+    private final Map<String, Integer> worldMap = new HashMap<>();
+    private final Map<Team, Integer> teamMap = new HashMap<>();
+    private final Map<String, List<Location>> playerBounds = new HashMap<>();
 
-    private static BukkitTask snapshotTask;
     private static final HashMap<Material, Integer> blockMap = new HashMap<>();
+    private static BukkitTask snapshotTask;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
-        InputStream in = getResource("block_mapping.csv");
+        InputStream in = getResource("block_accurate.csv");
         if (in != null) {
             try (Scanner scanner = new Scanner(in)) {
                 int lineNumber = 1;
@@ -45,7 +44,6 @@ public final class MinePath extends JavaPlugin {
                 }
             }
         }
-
 
         if (!getConfig().contains("delay"))
             getConfig().set("delay", 30);
@@ -101,6 +99,17 @@ public final class MinePath extends JavaPlugin {
         writer.close();
     }
 
+    private BlockInfo getHighestValidBlockData(int x, int z, ChunkSnapshot snapshot, World world) {
+        for (int y = world.getMaxHeight() - 1; y >= world.getMinHeight(); y--) {
+            BlockData blockData = snapshot.getBlockData(x, y, z);
+            Material material = blockData.getMaterial();
+            if (material != Material.BARRIER && material != Material.AIR && material != Material.LIGHT && material != Material.STRUCTURE_VOID && material != Material.CAVE_AIR) {
+                return new BlockInfo(blockData, y);
+            }
+        }
+        return null;
+    }
+
     public void startSnapshotTask() throws IOException {
         resetRecordingFile();
         addToCSVFile(recordingDataPath, "", false);
@@ -118,8 +127,49 @@ public final class MinePath extends JavaPlugin {
                 StringBuilder fileAdditions = new StringBuilder();
 
                 for (Player player : Bukkit.getOnlinePlayers()) {
-                    fileAdditions.append(snapshotIndex).append(",").append(player.getName()).append(",").append(player.getLocation().getBlockX()).append(",").append(player.getLocation().getBlockZ()).append("\n");
-                    playerLocations.add(player.getLocation());
+                    String worldName = player.getWorld().getName();
+
+                    if (!worldMap.containsKey(worldName))
+                        worldMap.put(worldName, worldMap.size());
+
+                    if (!uuidMap.containsKey(player.getUniqueId()))
+                        uuidMap.put(player.getUniqueId(), uuidMap.size());
+
+                    Team playerTeam = null;
+                    for (Team team : player.getScoreboard().getTeams()) {
+                        if (team.hasPlayer(player)) {
+                            playerTeam = team;
+                            break;
+                        }
+                    }
+                    int teamIndex = 0;
+
+                    if (playerTeam != null && !playerTeam.getEntries().isEmpty()) {
+                        if (!teamMap.containsKey(playerTeam)) {
+                            teamMap.put(playerTeam, teamMap.size() + 1);
+                        }
+                        teamIndex = teamMap.get(playerTeam);
+                    }
+
+                    fileAdditions.append(snapshotIndex)
+                            .append(",")
+                            .append(uuidMap.get(player.getUniqueId()))
+                            .append(",")
+                            .append(player.getLocation().getBlockX())
+                            .append(",")
+                            .append(player.getLocation().getBlockZ())
+                            .append(",")
+                            .append(worldMap.get(worldName))
+                            .append(",")
+                            .append(teamIndex)
+                            .append(",")
+                            .append(player.getGameMode().getValue())
+                            .append("\n");
+
+                    if (playerBounds.get(worldName) == null)
+                        playerBounds.put(worldName, new ArrayList<>());
+
+                    playerBounds.get(worldName).add(player.getLocation());
                 }
 
                 try {
@@ -129,7 +179,7 @@ public final class MinePath extends JavaPlugin {
                 getConfig().set("snapshot_index", snapshotIndex);
                 saveConfig();
             }
-        }.runTaskTimer(this, 0, snapshotDelay * 20);
+        }.runTaskTimer(this, 0, Math.max(snapshotDelay, 1));
     }
 
     public void stopSnapshotTask() throws IOException {
@@ -138,147 +188,174 @@ public final class MinePath extends JavaPlugin {
             getConfig().set("is_playing", false);
             saveConfig();
 
-            int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
-            int maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
-
-            for (Location loc : playerLocations) {
-                if (loc.getBlockX() < minX) minX = loc.getBlockX();
-                if (loc.getBlockZ() < minZ) minZ = loc.getBlockZ();
-                if (loc.getBlockX() > maxX) maxX = loc.getBlockX();
-                if (loc.getBlockZ() > maxZ) maxZ = loc.getBlockZ();
-            }
-
             sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Successfully stopped the recorder");
 
-            World overworld = Bukkit.getWorld("world");
+            addToCSVFile(recordingDataPath, "£\n", true); // £ = UUID data map
 
-            sendToOperators("--------------------");
-            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] TopLeft: (" + minX + ", " + minZ + ")");
-            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] BottomRight: (" + maxX + ", " + maxZ + ")");
-            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] " + (maxX - minX) + "x" + (maxZ - minZ));
-            sendToOperators("--------------------");
+            uuidMap.entrySet().stream()
+                    .sorted(Map.Entry.comparingByValue())
+                    .forEach(uuidEntry-> {
+                        String key = uuidEntry.getKey().toString();
+                        Integer value = uuidEntry.getValue();
+                        try {
+                            addToCSVFile(recordingDataPath, value + "," + Bukkit.getPlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
+                        } catch (IOException ignore) {}
+                    });
 
-            makeMapFile(overworld, minX, minZ, maxX, maxZ);
+            addToCSVFile(recordingDataPath, "?\n0,~\n", true); // £ = team data map
+
+            teamMap.entrySet().stream()
+                    .sorted(Map.Entry.comparingByValue())
+                    .forEach(teamEntry -> {
+                        String key = teamEntry.getKey().getName();
+                        Integer value = teamEntry.getValue();
+
+                        try {
+                            addToCSVFile(recordingDataPath, value + "," + key + "," + teamEntry.getKey().getColor().name().toLowerCase() + "\n", true);
+                        } catch (IOException ignore) {}
+                    });
+
+
+            addToCSVFile(recordingDataPath, "$\n", true); // $ = world data map
+
+            worldMap.entrySet().stream()
+                    .sorted(Map.Entry.comparingByValue())
+                    .forEach(worldEntry -> {
+                        String key = worldEntry.getKey();
+                        Integer value = worldEntry.getValue();
+                        try {
+                            addToCSVFile(recordingDataPath, value + "," + key + "\n", true);
+                        } catch (IOException ignore) {}
+                    });
+
+
+            for (String worldName : playerBounds.keySet()) {
+                World world = Bukkit.getWorld(worldName);
+
+                int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+                int maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+
+                for (Location loc : playerBounds.get(worldName)) {
+                    if (loc.getBlockX() < minX) minX = loc.getBlockX();
+                    if (loc.getBlockZ() < minZ) minZ = loc.getBlockZ();
+                    if (loc.getBlockX() > maxX) maxX = loc.getBlockX();
+                    if (loc.getBlockZ() > maxZ) maxZ = loc.getBlockZ();
+                }
+
+                if (world != null)
+                    makeMapFile(world, minX, minZ, maxX, maxZ);
+
+                sendToOperators("---- " + worldName + " ----");
+                sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] TopLeft: (" + minX + ", " + minZ + ")");
+                sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] BottomRight: (" + maxX + ", " + maxZ + ")");
+                sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] " + (maxX - minX+1) + "x" + (maxZ - minZ+1));
+                sendToOperators("----" + "-".repeat(worldName.length()) + "----");
+            }
+
+            playerBounds.clear();
         }
+
+
     }
 
+
     public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ) throws IOException {
-        final AtomicLong startTime = new AtomicLong(System.nanoTime());
+        long startTime = System.nanoTime();
 
-        String initData = "$\n" + minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
+        List<List<ChunkSnapshot>> chunkSnapshots = new ArrayList<>();
+
+        for (int z = Math.floorDiv(minZ,16); z <= Math.floorDiv(maxZ,16); z++) {
+            List<ChunkSnapshot> chunkRow = new ArrayList<>();
+            for (int x = Math.floorDiv(minX, 16); x <= Math.floorDiv(maxX, 16); x++) {
+                chunkRow.add(world.getChunkAt(x,z).getChunkSnapshot());
+            }
+            chunkSnapshots.add(chunkRow);
+        }
+
+        String initData = "#" + worldMap.get(world.getName()) + "\n" + minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
         File file = new File(getDataFolder(), recordingDataPath);
-
-        if (!getDataFolder().exists())
-            getDataFolder().mkdirs();
-        if (!file.exists())
-            file.createNewFile();
 
         final BufferedWriter writer = new BufferedWriter(new FileWriter(file, true));
         writer.write(initData);
+        writer.flush();
 
-        long dx = maxX - minX + 1;
-        long dz = maxZ - minZ + 1;
 
-        int minBatch = 20;
-        int maxBatch = 200;
-        long targetBlocks = 100_000;;
-        int batchSize = (int)Math.max(minBatch, Math.min(maxBatch, targetBlocks / dx));
-
-        final Queue<List<BlockInfo>> batchQueue = new ConcurrentLinkedQueue<>(); // A batch, in this context, means a split of data (in a given number of rows)
-
-        final AtomicReference<BukkitTask> blockRef = new AtomicReference<>();
-        final AtomicReference<BukkitTask> writeRef = new AtomicReference<>();
-
-        final AtomicInteger currentZ = new AtomicInteger(minZ);
-        final AtomicBoolean hasAllBlockData = new AtomicBoolean(false);
-
-        final long blocksPerBatch = batchSize * dx;
-        int execBaseline = 10500;
-        int executeTime = Math.max(1, (int)(blocksPerBatch / execBaseline));
-
-        int delayBaseline = 5000;
-
-        int delay;
-        if (blocksPerBatch <= 50_000)
-            delay = Math.min(40, Math.max(2, (int)Math.sqrt((double) blocksPerBatch / delayBaseline)));
-        else
-            delay = Math.min(200, Math.max(20, (int)(blocksPerBatch / delayBaseline))) * 3;
-
-        long totalRows = (maxZ - minZ + 1);
-        long batches = (long) Math.ceil((double) totalRows / batchSize);
-        long estimatedTime = (batches * (delay + executeTime)) / 20;
-
-        sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Fetching block data...");
-        sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Estimated time -> "+ estimatedTime + " seconds for " + (dz+1)*2 / batchSize  + " batches of size " + batchSize);
-
-        BukkitTask blockTask = Bukkit.getScheduler().runTaskTimer(this, new Runnable() {
+        Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
             @Override
             public void run() {
-                int startZ = currentZ.get();
-                int endZ = Math.min(startZ + batchSize, maxZ);
+                BlockInfo prevBlockInfo = null;
+                int blockCount = 1;
+                for (List<ChunkSnapshot> chunkRow : chunkSnapshots)
+                    for (int z = 0; z < 16; z++) {
+                        for (ChunkSnapshot snapshot : chunkRow) {
 
-                List<BlockInfo> batch = new ArrayList<>((int) (batchSize * dx));
+                            int chunkX = snapshot.getX() * 16;
+                            int chunkZ = snapshot.getZ() * 16;
 
-                for (int z = startZ; z <= endZ; z++) {
-                    for (int x = minX; x <= maxX; x++) {
-                        Block highestBlock = world.getHighestBlockAt(x, z);
-                        Integer id = blockMap.get(highestBlock.getType());
-                        if (id == null || id > blockMap.size())
-                            Bukkit.getLogger().warning(highestBlock.getType().toString().toLowerCase());
-                        else
-                            batch.add(new BlockInfo(id, highestBlock.getY()));
+                            int worldZ = chunkZ + z;
+                            StringBuilder sb = new StringBuilder();
+
+                            if (minZ > worldZ || maxZ < worldZ)
+                                continue;
+
+                            for (int x = 0; x < 16; x++) {
+                                int worldX = chunkX + x;
+
+                                if (minX > worldX || maxX < worldX)
+                                    continue;
+
+                                BlockInfo blockInfo = getHighestValidBlockData(x, z, snapshot, world);
+
+                                if (prevBlockInfo != null && Objects.equals(blockInfo, prevBlockInfo))
+                                    blockCount++;
+                                else {
+                                    if (prevBlockInfo != null) {
+                                        Material mat = prevBlockInfo.data().getMaterial();
+                                        int id = blockMap.get(mat);
+
+                                        sb.append(id)
+                                                .append(",")
+                                                .append(prevBlockInfo.y())
+                                                .append(",")
+                                                .append(blockCount)
+                                                .append("\n");
+                                    }
+                                    blockCount = 1;
+                                }
+                                prevBlockInfo = blockInfo;
+                            }
+
+                            try {
+                                writer.write(sb.toString());
+                                writer.flush();
+                            } catch (IOException ignored) {}
+                        }
+                    }
+
+                if (prevBlockInfo != null) {
+                    try {
+                        Material mat = prevBlockInfo.data().getMaterial();
+                        int id = blockMap.get(mat);
+                        writer.write(id + "," + prevBlockInfo.y() + "," + blockCount + "\n");
+                    } catch (IOException ignored) {
                     }
                 }
 
-                batchQueue.add(batch);
+                try {
+                    writer.close();
+                } catch (IOException ignored) {}
 
-                if (currentZ.get() > maxZ) {
-                    blockRef.get().cancel();
-                    hasAllBlockData.set(true);
-                } else {
-                    currentZ.set(endZ + 1);
-                }
+
+                sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d)));
             }
-        }, 0, delay);
-
-        blockRef.set(blockTask);
-
-
-        BukkitTask writeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, new Runnable() {
-            @Override
-            public void run() {
-                List<BlockInfo> batch = batchQueue.poll();
-                if (batch != null) {
-                    StringBuilder sb = new StringBuilder(batch.size() * 8);
-                    for (BlockInfo info : batch) {
-                        sb.append(info.id()).append(",").append(info.y()).append("\n");
-                    }
-                    try {
-                        writer.write(sb.toString());
-                        writer.flush();
-                    } catch (IOException ignored) {}
-                }
-                else {
-                    if (!hasAllBlockData.get())
-                        return;
-                    sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed, took " + ((System.nanoTime() - startTime.get())/1_000_000_000) + " second(s)");
-                    try {
-                        writer.close();
-                    } catch (IOException ignored) {}
-
-                    writeRef.get().cancel();
-                }
-            }
-        }, 0L, 5L);
-
-        writeRef.set(writeTask);
+        });
     }
 
 
     public void resetRecordingFile() throws IOException {
         sendToOperators(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] The recording data has been cleared");
 
-        playerLocations.clear();
+        playerBounds.clear();
         snapshotIndex = 0;
         getConfig().set("snapshot_index", 0);
         getConfig().set("is_playing", false);
@@ -291,7 +368,7 @@ public final class MinePath extends JavaPlugin {
             snapshotDelay = Integer.parseInt(newDelay);
             getConfig().set("delay", snapshotDelay);
             saveConfig();
-            sendToOperators(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] Snapshot delay is now " + newDelay + " seconds");
+            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Snapshot delay is now " + newDelay + " tick(s)");
         }
         catch (Exception e) {
             sender.sendMessage(ChatColor.BOLD+ "" + ChatColor.RED + "[MINEPATH] " + newDelay + " is not an integer value");
@@ -305,3 +382,131 @@ public final class MinePath extends JavaPlugin {
         }
     }
 }
+
+//    public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ) throws IOException {
+//        final AtomicLong startTime = new AtomicLong(System.nanoTime());
+//
+//        String initData = "#" + worldMap.get(world.getName()) + "\n" + minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
+//        File file = new File(getDataFolder(), recordingDataPath);
+//
+//        final BufferedWriter writer = new BufferedWriter(new FileWriter(file, true));
+//        writer.write(initData);
+//
+//        long dx = maxX - minX + 1;
+//
+//        int minBatch = 20;
+//        int maxBatch = 200;
+//        long targetBlocks = 100_000;;
+//        int batchSize = (int)Math.max(minBatch, Math.min(maxBatch, targetBlocks / dx));
+//
+//        final Queue<List<BlockInfo>> batchQueue = new ConcurrentLinkedQueue<>(); // A batch, in this context, means a split of data (in a given number of rows)
+//
+//        final AtomicReference<BukkitTask> blockRef = new AtomicReference<>();
+//        final AtomicReference<BukkitTask> writeRef = new AtomicReference<>();
+//
+//        final AtomicInteger currentZ = new AtomicInteger(minZ);
+//        final AtomicBoolean hasAllBlockData = new AtomicBoolean(false);
+//
+//        final long blocksPerBatch = batchSize * dx;
+//        int delayBaseline = 5000;
+//
+//        int delay;
+//        if (blocksPerBatch <= 50_000)
+//            delay = Math.min(40, Math.max(2, (int)Math.sqrt((double) blocksPerBatch / delayBaseline)));
+//        else
+//            delay = Math.min(200, Math.max(20, (int)(blocksPerBatch / delayBaseline))) * 3;
+//
+//
+//        sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Fetching block data...");
+//
+//        BukkitTask blockTask = Bukkit.getScheduler().runTaskTimer(this, new Runnable() {
+//            @Override
+//            public void run() {
+//                int startZ = currentZ.get();
+//                int endZ = Math.min(startZ + batchSize, maxZ);
+//
+//                List<BlockInfo> batch = new ArrayList<>((int) (batchSize * dx));
+//
+//                for (int z = startZ; z <= endZ; z++) {
+//                    for (int x = minX; x <= maxX; x++) {
+//                        Block highestBlock = getHighestValidMaterial(x, z, world);
+//
+//                        if (highestBlock != null) {
+//                            Integer id = blockMap.get(highestBlock.getType());
+//
+//                            if (id == null || id > blockMap.size()) {
+//                                Bukkit.getLogger().warning(highestBlock.getType().toString().toLowerCase());
+//                                batch.add(new BlockInfo(blockMap.get(Material.VOID_AIR), -64));
+//                            }
+//                            else
+//                                batch.add(new BlockInfo(id, highestBlock.getY()));
+//                        }
+//                        else {
+//                            batch.add(new BlockInfo(blockMap.get(Material.VOID_AIR), -64));
+//                        }
+//                    }
+//                }
+//
+//                batchQueue.add(batch);
+//
+//                if (currentZ.get() > maxZ) {
+//                    blockRef.get().cancel();
+//                    hasAllBlockData.set(true);
+//                } else {
+//                    currentZ.set(endZ + 1);
+//                }
+//            }
+//        }, 0, delay);
+//
+//        blockRef.set(blockTask);
+//
+//
+//        BukkitTask writeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, new Runnable() {
+//            @Override
+//            public void run() {
+//                List<BlockInfo> batch = batchQueue.poll();
+//                if (batch != null) {
+//                    StringBuilder sb = new StringBuilder(batch.size() * 8);
+//                    BlockInfo prevInfo = null;
+//                    int similarCounter = 1;
+//                    for (BlockInfo info : batch) {
+//                        if (prevInfo != null && prevInfo.id() == info.id() && prevInfo.y() == info.y()) {
+//                            similarCounter++;
+//                        }
+//                        else {
+//                            if (prevInfo != null)
+//                                sb.append(prevInfo.id()).append(",").append(prevInfo.y()).append(",").append(similarCounter).append("\n");
+//                            similarCounter = 1;
+//                        }
+//                        prevInfo = info;
+//                    }
+//
+//                    if (prevInfo != null) {
+//                        sb.append(prevInfo.id())
+//                                .append(",")
+//                                .append(prevInfo.y())
+//                                .append(",")
+//                                .append(similarCounter)
+//                                .append("\n");
+//                    }
+//
+//                    try {
+//                        writer.write(sb.toString());
+//                        writer.flush();
+//                    } catch (IOException ignored) {}
+//                }
+//                else {
+//                    if (!hasAllBlockData.get())
+//                        return;
+//                    sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime.get())/1_000_000_000d)));
+//                    try {
+//                        writer.close();
+//                    } catch (IOException ignored) {}
+//
+//                    writeRef.get().cancel();
+//                }
+//            }
+//        }, 0L, 5L);
+//
+//        writeRef.set(writeTask);
+//    }

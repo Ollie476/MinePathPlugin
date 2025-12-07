@@ -36,7 +36,7 @@ public class Commands implements CommandExecutor {
                     break;
                 case "info":
                     sender.sendMessage("--------------------");
-                    sender.sendMessage(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] Recording intervals: " + plugin.snapshotDelay + " second(s)");
+                    sender.sendMessage(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] Recording intervals: " + plugin.snapshotDelay + " tick(s)");
                     sender.sendMessage(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] Current snapshot index: " + plugin.snapshotIndex);
                     if (plugin.getConfig().getBoolean("is_playing"))
                         sender.sendMessage(ChatColor.BOLD+ "" + ChatColor.GOLD + "[MINEPATH] The recorder is on");
