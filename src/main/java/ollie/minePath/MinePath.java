@@ -107,10 +107,13 @@ public final class MinePath extends JavaPlugin {
                 return new BlockInfo(blockData, y);
             }
         }
-        return null;
+        int y = world.getMinHeight();
+        return new BlockInfo(snapshot.getBlockData(x, y, z), y);
     }
 
     public void startSnapshotTask() throws IOException {
+        snapshotIndex = 0;
+        getConfig().set("snapshot_index", 0);
         resetRecordingFile();
         addToCSVFile(recordingDataPath, "", false);
         if (snapshotTask != null) {
@@ -198,7 +201,7 @@ public final class MinePath extends JavaPlugin {
                         String key = uuidEntry.getKey().toString();
                         Integer value = uuidEntry.getValue();
                         try {
-                            addToCSVFile(recordingDataPath, value + "," + Bukkit.getPlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
+                            addToCSVFile(recordingDataPath, value + "," + Bukkit.getOfflinePlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
                         } catch (IOException ignore) {}
                     });
 
@@ -242,6 +245,9 @@ public final class MinePath extends JavaPlugin {
                     if (loc.getBlockZ() > maxZ) maxZ = loc.getBlockZ();
                 }
 
+                if (minZ == maxZ && minX == maxX)
+                    continue;
+
                 if (world != null)
                     makeMapFile(world, minX, minZ, maxX, maxZ);
 
@@ -254,8 +260,6 @@ public final class MinePath extends JavaPlugin {
 
             playerBounds.clear();
         }
-
-
     }
 
 
@@ -273,16 +277,11 @@ public final class MinePath extends JavaPlugin {
         }
 
         String initData = "#" + worldMap.get(world.getName()) + "\n" + minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
-        File file = new File(getDataFolder(), recordingDataPath);
-
-        final BufferedWriter writer = new BufferedWriter(new FileWriter(file, true));
-        writer.write(initData);
-        writer.flush();
-
 
         Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
             @Override
             public void run() {
+                StringBuilder sb = new StringBuilder();
                 BlockInfo prevBlockInfo = null;
                 int blockCount = 1;
                 for (List<ChunkSnapshot> chunkRow : chunkSnapshots)
@@ -293,7 +292,6 @@ public final class MinePath extends JavaPlugin {
                             int chunkZ = snapshot.getZ() * 16;
 
                             int worldZ = chunkZ + z;
-                            StringBuilder sb = new StringBuilder();
 
                             if (minZ > worldZ || maxZ < worldZ)
                                 continue;
@@ -324,13 +322,21 @@ public final class MinePath extends JavaPlugin {
                                 }
                                 prevBlockInfo = blockInfo;
                             }
-
-                            try {
-                                writer.write(sb.toString());
-                                writer.flush();
-                            } catch (IOException ignored) {}
                         }
                     }
+
+                File file = new File(getDataFolder(), recordingDataPath);
+                BufferedWriter writer = null;
+                try {
+                    writer = new BufferedWriter(new FileWriter(file, true));
+                } catch (IOException ignore) {}
+
+                try {
+                    writer.write(initData);
+                    writer.flush();
+                    writer.write(sb.toString());
+                    writer.flush();
+                } catch (IOException ignored) {}
 
                 if (prevBlockInfo != null) {
                     try {
