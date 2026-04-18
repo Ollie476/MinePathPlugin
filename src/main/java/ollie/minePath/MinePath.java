@@ -284,6 +284,7 @@ public final class MinePath extends JavaPlugin {
                 StringBuilder sb = new StringBuilder();
                 BlockInfo prevBlockInfo = null;
                 int blockCount = 1;
+                HashSet<Material> unknownBlocks = new HashSet<Material> ();
                 for (List<ChunkSnapshot> chunkRow : chunkSnapshots)
                     for (int z = 0; z < 16; z++) {
                         for (ChunkSnapshot snapshot : chunkRow) {
@@ -309,7 +310,18 @@ public final class MinePath extends JavaPlugin {
                                 else {
                                     if (prevBlockInfo != null) {
                                         Material mat = prevBlockInfo.data().getMaterial();
-                                        int id = blockMap.get(mat);
+                                        int id;
+                                        try {
+                                            id = blockMap.get(mat);
+                                        }
+                                        catch (Exception e) {
+                                            if (!unknownBlocks.contains(mat)) {
+                                                Bukkit.getLogger().warning("[MINEPATH] " + mat.name() + " is not supported");
+                                                unknownBlocks.add(mat);
+                                            }
+                                            id = blockMap.get(Material.AIR); // if it doesn't work
+                                        }
+
 
                                         sb.append(id)
                                                 .append(",")
@@ -343,8 +355,7 @@ public final class MinePath extends JavaPlugin {
                         Material mat = prevBlockInfo.data().getMaterial();
                         int id = blockMap.get(mat);
                         writer.write(id + "," + prevBlockInfo.y() + "," + blockCount + "\n");
-                    } catch (IOException ignored) {
-                    }
+                    } catch (IOException ignored) {}
                 }
 
                 try {
