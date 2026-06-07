@@ -13,6 +13,8 @@ import org.bukkit.scoreboard.Team;
 
 import java.io.*;
 import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 record BlockInfo(BlockData data, int y) {}
 
@@ -20,11 +22,16 @@ public final class MinePath extends JavaPlugin {
     public long snapshotDelay;
     public long snapshotIndex;
 
-    private final String recordingDataPath = "recording_data.csv";
+    private final String recordingDataPath = "snapshots.csv";
+    private final String teamMapPath = "teamMap.csv";
+    private final String UUIDMapPath = "uuidMap.csv";
+    private final String zipOutputPath = "recordingData.zip";
+
     private final Map<UUID, Integer> uuidMap = new HashMap<>();
     private final Map<String, Integer> worldMap = new HashMap<>();
     private final Map<Team, Integer> teamMap = new HashMap<>();
     private final Map<String, List<Location>> playerBounds = new HashMap<>();
+
 
     private static final HashMap<Material, Integer> blockMap = new HashMap<>();
     private static BukkitTask snapshotTask;
@@ -87,12 +94,7 @@ public final class MinePath extends JavaPlugin {
             getDataFolder().mkdirs();
 
         File file = new File(getDataFolder(), path);
-
-        if (!file.exists()) {
-            try {
-                file.createNewFile();
-            } catch (IOException ignored) {}
-        }
+        createFile(file);
 
         FileWriter writer = new FileWriter(file, append);
         writer.write(data);
@@ -158,9 +160,9 @@ public final class MinePath extends JavaPlugin {
                             .append(",")
                             .append(uuidMap.get(player.getUniqueId()))
                             .append(",")
-                            .append(player.getLocation().getBlockX())
+                            .append(Math.round(player.getLocation().getX() * 10))
                             .append(",")
-                            .append(player.getLocation().getBlockZ())
+                            .append(Math.round(player.getLocation().getZ() * 10))
                             .append(",")
                             .append(worldMap.get(worldName))
                             .append(",")
@@ -193,19 +195,17 @@ public final class MinePath extends JavaPlugin {
 
             sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Successfully stopped the recorder");
 
-            addToCSVFile(recordingDataPath, "£\n", true); // £ = UUID data map
-
-            uuidMap.entrySet().stream()
+            uuidMap.entrySet().stream() // UUID map file
                     .sorted(Map.Entry.comparingByValue())
                     .forEach(uuidEntry-> {
                         String key = uuidEntry.getKey().toString();
                         Integer value = uuidEntry.getValue();
                         try {
-                            addToCSVFile(recordingDataPath, value + "," + Bukkit.getOfflinePlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
+                            addToCSVFile(UUIDMapPath, value + "," + Bukkit.getOfflinePlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
                         } catch (IOException ignore) {}
                     });
 
-            addToCSVFile(recordingDataPath, "?\n0,~\n", true); // £ = team data map
+            addToCSVFile(teamMapPath, "0,~\n", true); // £ = team data map
 
             teamMap.entrySet().stream()
                     .sorted(Map.Entry.comparingByValue())
@@ -214,20 +214,7 @@ public final class MinePath extends JavaPlugin {
                         Integer value = teamEntry.getValue();
 
                         try {
-                            addToCSVFile(recordingDataPath, value + "," + key + "," + teamEntry.getKey().getColor().name().toLowerCase() + "\n", true);
-                        } catch (IOException ignore) {}
-                    });
-
-
-            addToCSVFile(recordingDataPath, "$\n", true); // $ = world data map
-
-            worldMap.entrySet().stream()
-                    .sorted(Map.Entry.comparingByValue())
-                    .forEach(worldEntry -> {
-                        String key = worldEntry.getKey();
-                        Integer value = worldEntry.getValue();
-                        try {
-                            addToCSVFile(recordingDataPath, value + "," + key + "\n", true);
+                            addToCSVFile(teamMapPath, value + "," + key + "," + teamEntry.getKey().getColor().name().toLowerCase() + "\n", true);
                         } catch (IOException ignore) {}
                     });
 
@@ -259,6 +246,43 @@ public final class MinePath extends JavaPlugin {
             }
 
             playerBounds.clear();
+
+            // zip file logic here
+            File zipOutputFile = new File(getDataFolder(), zipOutputPath);
+            createFile(zipOutputFile);
+
+            ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile));
+            byte[] bytes = new byte[65536];
+
+            File[] files = getDataFolder().listFiles();
+
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isFile() && !file.getName().equals(zipOutputPath)) {
+                        ZipEntry entry = new ZipEntry(file.getName());
+                        out.putNextEntry(entry);
+
+                        try (FileInputStream in = new FileInputStream(file)) {
+                            int length;
+                            while ((length = in.read(bytes)) >= 0) {
+                                out.write(bytes, 0, length);
+                            }
+                        }
+
+                        out.closeEntry();
+                    }
+                }
+                out.close();
+            }
+
+        }
+    }
+
+    private void createFile(File file) {
+        if (!file.exists()) {
+            try {
+                file.createNewFile();
+            } catch (IOException ignored) {}
         }
     }
 
@@ -266,17 +290,31 @@ public final class MinePath extends JavaPlugin {
     public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ) throws IOException {
         long startTime = System.nanoTime();
 
-        List<List<ChunkSnapshot>> chunkSnapshots = new ArrayList<>();
+        int minChunkZ = minZ >> 4;
+        int maxChunkZ = maxZ >> 4;
 
-        for (int z = Math.floorDiv(minZ,16); z <= Math.floorDiv(maxZ,16); z++) {
-            List<ChunkSnapshot> chunkRow = new ArrayList<>();
-            for (int x = Math.floorDiv(minX, 16); x <= Math.floorDiv(maxX, 16); x++) {
-                chunkRow.add(world.getChunkAt(x,z).getChunkSnapshot(true, false, false));
+        int minChunkX = minX >> 4;
+        int maxChunkX = maxX >> 4;
+
+        int rowCount = (maxChunkZ - minChunkZ) + 1;
+        int rowLength = (maxChunkX - minChunkX) + 1;
+
+
+        ChunkSnapshot[][] chunkSnapshots = new ChunkSnapshot[rowCount][rowLength];
+
+        File file = new File(getDataFolder(), world.getName() + ".csv");
+        createFile(file);
+
+
+        for (int z = minChunkZ; z <= maxChunkZ; z++) {
+            int indexZ = z - minChunkZ;
+            for (int x = minChunkX; x <= maxChunkX; x++) {
+                int indexX = x - minChunkX;
+                chunkSnapshots[indexZ][indexX] = world.getChunkAt(x,z).getChunkSnapshot(true, false, false);
             }
-            chunkSnapshots.add(chunkRow);
         }
 
-        String initData = "#" + worldMap.get(world.getName()) + "\n" + minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
+        String initData = minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
 
         Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
             @Override
@@ -284,18 +322,18 @@ public final class MinePath extends JavaPlugin {
                 StringBuilder sb = new StringBuilder();
                 BlockInfo prevBlockInfo = null;
                 int blockCount = 1;
-                HashSet<Material> unknownBlocks = new HashSet<Material> ();
-                for (List<ChunkSnapshot> chunkRow : chunkSnapshots)
-                    for (int z = 0; z < 16; z++) {
-                        for (ChunkSnapshot snapshot : chunkRow) {
 
-                            int chunkX = snapshot.getX() * 16;
-                            int chunkZ = snapshot.getZ() * 16;
+                for (ChunkSnapshot[] chunkRow: chunkSnapshots) {
+                    for (int z = 0; z < 16; z++)
+                        for (ChunkSnapshot chunk: chunkRow) {
+                            int chunkZ = chunk.getZ() * 16;
 
                             int worldZ = chunkZ + z;
 
                             if (minZ > worldZ || maxZ < worldZ)
                                 continue;
+
+                            int chunkX = chunk.getX() * 16;
 
                             for (int x = 0; x < 16; x++) {
                                 int worldX = chunkX + x;
@@ -303,25 +341,24 @@ public final class MinePath extends JavaPlugin {
                                 if (minX > worldX || maxX < worldX)
                                     continue;
 
-                                BlockInfo blockInfo = getHighestValidBlockData(x, z, snapshot, world);
+                                BlockInfo blockInfo = getHighestValidBlockData(x, z, chunk, world);
 
-                                if (prevBlockInfo != null && Objects.equals(blockInfo, prevBlockInfo))
+                                if (prevBlockInfo != null && Objects.equals(blockInfo, prevBlockInfo)) {
                                     blockCount++;
+                                }
                                 else {
-                                    if (prevBlockInfo != null) {
+                                    if (prevBlockInfo != null) { // write block info
                                         Material mat = prevBlockInfo.data().getMaterial();
+
                                         int id;
-                                        try {
+
+                                        if (blockMap.containsKey(mat)) {
                                             id = blockMap.get(mat);
                                         }
-                                        catch (Exception e) {
-                                            if (!unknownBlocks.contains(mat)) {
-                                                Bukkit.getLogger().warning("[MINEPATH] " + mat.name() + " is not supported");
-                                                unknownBlocks.add(mat);
-                                            }
-                                            id = blockMap.get(Material.AIR); // if it doesn't work
+                                        else {
+                                            Bukkit.getLogger().warning("[MINEPATH] " + mat.name() + " is not supported by Minepath");
+                                            id = blockMap.get(Material.AIR);
                                         }
-
 
                                         sb.append(id)
                                                 .append(",")
@@ -332,18 +369,16 @@ public final class MinePath extends JavaPlugin {
                                     }
                                     blockCount = 1;
                                 }
+
                                 prevBlockInfo = blockInfo;
+
                             }
                         }
-                    }
-
-                File file = new File(getDataFolder(), recordingDataPath);
+                }
+                // File writing logic here
                 BufferedWriter writer = null;
                 try {
                     writer = new BufferedWriter(new FileWriter(file, true));
-                } catch (IOException ignore) {}
-
-                try {
                     writer.write(initData);
                     writer.flush();
                     writer.write(sb.toString());
@@ -353,15 +388,20 @@ public final class MinePath extends JavaPlugin {
                 if (prevBlockInfo != null) {
                     try {
                         Material mat = prevBlockInfo.data().getMaterial();
-                        int id = blockMap.get(mat);
-                        writer.write(id + "," + prevBlockInfo.y() + "," + blockCount + "\n");
+
+                        int id;
+
+                        if (blockMap.containsKey(mat)) {
+                            id = blockMap.get(mat);
+                        } else {
+                            Bukkit.getLogger().warning("[MINEPATH] " + mat.name() + " is not supported by Minepath");
+                            id = blockMap.get(Material.AIR);
+                        }
+
+                        writer.write(id + "," + prevBlockInfo.y() + "," + blockCount);
+                        writer.close();
                     } catch (IOException ignored) {}
                 }
-
-                try {
-                    writer.close();
-                } catch (IOException ignored) {}
-
 
                 sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d)));
             }
