@@ -194,7 +194,7 @@ public final class MinePath extends JavaPlugin {
             saveConfig();
 
             sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Successfully stopped the recorder");
-
+            addToCSVFile(teamMapPath, "", false);
             uuidMap.entrySet().stream() // UUID map file
                     .sorted(Map.Entry.comparingByValue())
                     .forEach(uuidEntry-> {
@@ -205,7 +205,7 @@ public final class MinePath extends JavaPlugin {
                         } catch (IOException ignore) {}
                     });
 
-            addToCSVFile(teamMapPath, "0,~\n", true); // £ = team data map
+            addToCSVFile(teamMapPath, "0,~\n", false); // base team
 
             teamMap.entrySet().stream()
                     .sorted(Map.Entry.comparingByValue())
@@ -218,6 +218,8 @@ public final class MinePath extends JavaPlugin {
                         } catch (IOException ignore) {}
                     });
 
+            int worldAmount = playerBounds.size();
+            int worldCount = 0;
 
             for (String worldName : playerBounds.keySet()) {
                 World world = Bukkit.getWorld(worldName);
@@ -236,44 +238,17 @@ public final class MinePath extends JavaPlugin {
                     continue;
 
                 if (world != null)
-                    makeMapFile(world, minX, minZ, maxX, maxZ);
+                    makeMapFile(world, minX, minZ, maxX, maxZ, worldAmount == worldCount+1);
 
                 sendToOperators("---- " + worldName + " ----");
                 sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] TopLeft: (" + minX + ", " + minZ + ")");
                 sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] BottomRight: (" + maxX + ", " + maxZ + ")");
                 sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] " + (maxX - minX+1) + "x" + (maxZ - minZ+1));
                 sendToOperators("----" + "-".repeat(worldName.length()) + "----");
+                worldCount++;
             }
 
             playerBounds.clear();
-
-            // zip file logic here
-            File zipOutputFile = new File(getDataFolder(), zipOutputPath);
-            createFile(zipOutputFile);
-
-            ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile));
-            byte[] bytes = new byte[65536];
-
-            File[] files = getDataFolder().listFiles();
-
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isFile() && !file.getName().equals(zipOutputPath)) {
-                        ZipEntry entry = new ZipEntry(file.getName());
-                        out.putNextEntry(entry);
-
-                        try (FileInputStream in = new FileInputStream(file)) {
-                            int length;
-                            while ((length = in.read(bytes)) >= 0) {
-                                out.write(bytes, 0, length);
-                            }
-                        }
-
-                        out.closeEntry();
-                    }
-                }
-                out.close();
-            }
 
         }
     }
@@ -287,7 +262,7 @@ public final class MinePath extends JavaPlugin {
     }
 
 
-    public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ) throws IOException {
+    public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ, boolean isFinalWorldFile) throws IOException {
         long startTime = System.nanoTime();
 
         int minChunkZ = minZ >> 4;
@@ -404,6 +379,49 @@ public final class MinePath extends JavaPlugin {
                 }
 
                 sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d)));
+
+                File zipOutputFile = new File(getDataFolder(), zipOutputPath);
+                createFile(zipOutputFile);
+                if (isFinalWorldFile) {
+                    try {
+                        ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile));
+                        byte[] bytes = new byte[65536];
+
+                        File[] files = getDataFolder().listFiles();
+
+                        if (files != null) {
+                            for (File file : files) {
+                                if (file.isFile()) {
+                                    if (!file.getName().equals(zipOutputPath)) {
+                                        ZipEntry entry = new ZipEntry(file.getName());
+                                        out.putNextEntry(entry);
+
+                                        try (FileInputStream in = new FileInputStream(file)) {
+                                            int length;
+                                            while ((length = in.read(bytes)) >= 0) {
+                                                out.write(bytes, 0, length);
+                                            }
+                                        }
+
+                                        out.closeEntry();
+                                    }
+                                    String filePath = file.getAbsolutePath();
+
+                                    if (filePath.endsWith(".csv")) {
+                                        if (!file.delete()) {
+                                            getLogger().warning("Failed to delete: " + filePath);
+                                        }
+                                    }
+                                }
+                            }
+                            out.close();
+                            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All Processes have now been complete! Your data is now ready.");
+                        }
+                    } catch (IOException ignored) {
+                        sendToOperators(ChatColor.BOLD + "" + ChatColor.RED + "[MINEPATH] An error has occurred compress your data");
+                    }
+
+                }
             }
         });
     }
