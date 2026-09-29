@@ -309,7 +309,6 @@ public final class MinePath extends JavaPlugin {
         int rowCount = (maxChunkZ - minChunkZ) + 1;
         int rowLength = (maxChunkX - minChunkX) + 1;
 
-
         ChunkSnapshot[][] chunkSnapshots = new ChunkSnapshot[rowCount][rowLength];
 
         File landFile = new File(getDataFolder(),"world-" + world.getName() + "-land.csv");
@@ -317,12 +316,15 @@ public final class MinePath extends JavaPlugin {
         createFile(landFile);
         createFile(waterFile);
 
-
         for (int z = minChunkZ; z <= maxChunkZ; z++) {
             int indexZ = z - minChunkZ;
             for (int x = minChunkX; x <= maxChunkX; x++) {
                 int indexX = x - minChunkX;
-                chunkSnapshots[indexZ][indexX] = world.getChunkAt(x,z).getChunkSnapshot(true, true, false);
+                Chunk chunk = world.getChunkAt(x, z);
+                if (!chunk.isLoaded()) {
+                    chunk.load(true);
+                }
+                chunkSnapshots[indexZ][indexX] = chunk.getChunkSnapshot(true, true, false);
             }
         }
 
@@ -333,146 +335,140 @@ public final class MinePath extends JavaPlugin {
             public void run() {
                 StringBuilder sbLand = new StringBuilder();
                 StringBuilder sbWater = new StringBuilder();
+
                 Material prevBlockMat = null;
                 Biome prevBiome = null;
                 Location prevLocation = null;
+                int prevY = -999;
                 int repeatedBlockCount = 1;
+
                 int repeatedWaterBlockCount = 1;
                 boolean isPrevBlockUnderwater = false;
                 Location prevWaterLocation = null;
                 Biome prevWaterBiome = null;
 
-                for (ChunkSnapshot[] chunkRow: chunkSnapshots) {
-                    for (ChunkSnapshot chunk : chunkRow) {
-                        int chunkZ = chunk.getZ() * 16;
-                        int chunkX = chunk.getX() * 16;
+                for (int worldZ = minZ; worldZ <= maxZ; worldZ++) {
+                    int chunkZIndex = (worldZ >> 4) - minChunkZ;
+                    int localZ = worldZ & 15;
 
-                        for (int z = 0; z < 16; z++) {
-                            int worldZ = chunkZ + z;
-                            if (minZ > worldZ || maxZ < worldZ) continue;
+                    for (int worldX = minX; worldX <= maxX; worldX++) {
+                        int chunkXIndex = (worldX >> 4) - minChunkX;
+                        int localX = worldX & 15;
 
-                            for (int x = 0; x < 16; x++) {
-                                int worldX = chunkX + x;
-                                if (minX > worldX || maxX < worldX) continue;
+                        ChunkSnapshot chunk = chunkSnapshots[chunkZIndex][chunkXIndex];
+                        if (chunk == null) continue;
 
-                                BlockInfo blockInfo = getHighestValidNonWaterBlockData(x, z, chunk, world);
-                                int y = blockInfo.y();
+                        BlockInfo blockInfo = getHighestValidNonWaterBlockData(localX, localZ, chunk, world);
+                        int y = blockInfo.y();
 
-                                Material mat = chunk.getBlockType(x, y, z);
-                                Biome biome = chunk.getBiome(x, y, z);
-                                Location blockLocation = new Location(world, worldX, y, worldZ);
+                        Material mat = chunk.getBlockType(localX, y, localZ);
+                        Biome biome = chunk.getBiome(localX, y, localZ);
+                        Location blockLocation = new Location(world, worldX, y, worldZ);
 
+                        boolean isBlockUnderwater = blockInfo.isUnderwater();
+                        Biome waterBiome = null;
+                        Location waterLocation = null;
+                        if (!isPrevBlockUnderwater && isBlockUnderwater) {
+                            waterBiome = biome;
+                            waterLocation = blockLocation;
+                        }
 
-                                boolean isBlockUnderwater = blockInfo.isUnderwater();
-                                Biome waterBiome = null;
-                                Location waterLocation = null;
-                                if (!isPrevBlockUnderwater && isBlockUnderwater) {
-                                    waterBiome = biome;
-                                    waterLocation = blockLocation;
-                                }
+                        if (isPrevBlockUnderwater && isBlockUnderwater) {
+                            repeatedWaterBlockCount++;
+                        }
+                        else if (isPrevBlockUnderwater && !isBlockUnderwater) {
+                            if (prevWaterBiome != null) {
+                                int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
 
-                                boolean isSameRun = isPrevBlockUnderwater && isBlockUnderwater && blockLocation.getBlockY() == prevWaterLocation.getBlockY() && blockLocation.getBlockZ() == prevWaterLocation.getBlockZ() && biome.equals(prevWaterBiome);
-
-                                if (isSameRun) {
-                                    repeatedWaterBlockCount++;
-                                } else {
-                                    if (prevWaterBiome == null) {
-
-                                    } else {
-                                        int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
-
-                                        sbWater.append(prevWaterLocation.getBlockX())
-                                                .append(",")
-                                                .append(prevWaterLocation.getBlockY())
-                                                .append(",")
-                                                .append(prevWaterLocation.getBlockZ())
-                                                .append(",")
-                                                .append(prevWaterBiomeId)
-                                                .append(",")
-                                                .append(repeatedWaterBlockCount)
-                                                .append("\n");
-                                        repeatedWaterBlockCount = 1;
-                                    }
-                                }
-
-                                if (prevBlockMat == null) {
-                                    prevBlockMat = mat;
-                                    prevBiome = biome;
-                                    prevLocation = blockLocation;
-                                    repeatedBlockCount = 1;
-                                } else if (prevBlockMat != mat || prevBiome != biome) { // if prevBlock != current Block (stop RLE)
-                                    if (prevBiome == null) {
-
-                                    } else {
-                                        int prevBlockMatId = blockMap.get(prevBlockMat);
-                                        int prevBiomeId = biomeMap.get(prevBiome.toString());
-
-                                        sbLand.append(prevBlockMatId)
-                                                .append(",")
-                                                .append(prevLocation.getBlockY())
-                                                .append(",")
-                                                .append(prevBiomeId)
-                                                .append(",")
-                                                .append(repeatedBlockCount)
-                                                .append("\n");
-                                        repeatedBlockCount = 1;
-                                    }
-                                } else {
-                                    repeatedBlockCount++;
-                                }
-                                prevBlockMat = mat;
-                                prevBiome = biome;
-                                prevLocation = blockLocation;
-                                isPrevBlockUnderwater = blockInfo.isUnderwater();
-
-                                if (waterBiome != null) {
-                                    prevWaterBiome = waterBiome;
-                                    prevWaterLocation = waterLocation;
-                                }
+                                sbWater.append(prevWaterLocation.getBlockX())
+                                        .append(",")
+                                        .append(prevWaterLocation.getBlockY())
+                                        .append(",")
+                                        .append(prevWaterLocation.getBlockZ())
+                                        .append(",")
+                                        .append(prevWaterBiomeId)
+                                        .append(",")
+                                        .append(repeatedWaterBlockCount)
+                                        .append("\n");
+                                repeatedWaterBlockCount = 1;
                             }
                         }
-                    }
 
-                    int prevBlockMatId = blockMap.get(prevBlockMat);
-                    int prevBiomeId = biomeMap.get(prevBiome.toString());
+                        if (prevBlockMat == null) {
+                            prevBlockMat = mat;
+                            prevBiome = biome;
+                            prevY = y;
+                            prevLocation = blockLocation;
+                            repeatedBlockCount = 1;
+                        }
+                        // Break RLE sequence if Material, Biome, OR Height (Y) changes!
+                        else if (prevBlockMat != mat || prevBiome != biome || prevY != y) {
+                            if (prevBiome != null) {
+                                int prevBlockMatId = blockMap.getOrDefault(prevBlockMat, 1);
+                                int prevBiomeId = biomeMap.getOrDefault(prevBiome.toString(), 0);
+
+                                sbLand.append(prevBlockMatId)
+                                        .append(",")
+                                        .append(prevY)
+                                        .append(",")
+                                        .append(prevBiomeId)
+                                        .append(",")
+                                        .append(repeatedBlockCount)
+                                        .append("\n");
+                                repeatedBlockCount = 1;
+                            }
+                            prevBlockMat = mat;
+                            prevBiome = biome;
+                            prevY = y;
+                            prevLocation = blockLocation;
+                        } else {
+                            repeatedBlockCount++;
+                        }
+
+                        isPrevBlockUnderwater = blockInfo.isUnderwater();
+
+                        if (waterBiome != null) {
+                            prevWaterBiome = waterBiome;
+                            prevWaterLocation = waterLocation;
+                        }
+                    }
+                }
+
+                if (prevBlockMat != null && prevBiome != null) {
+                    int prevBlockMatId = blockMap.getOrDefault(prevBlockMat, 1);
+                    int prevBiomeId = biomeMap.getOrDefault(prevBiome.toString(), 0);
 
                     sbLand.append(prevBlockMatId)
                             .append(",")
-                            .append(prevLocation.getY())
+                            .append(prevY)
                             .append(",")
                             .append(prevBiomeId)
                             .append(",")
                             .append(repeatedBlockCount)
                             .append("\n");
-
-                    if (isPrevBlockUnderwater) {
-                        int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
-                        sbWater.append(prevLocation.getBlockX())
-                                .append(",")
-                                .append(prevLocation.getBlockY())
-                                .append(",")
-                                .append(prevLocation.getBlockZ())
-                                .append(",")
-                                .append(prevWaterBiomeId)
-                                .append(",")
-                                .append(repeatedWaterBlockCount);
-                    }
                 }
 
-                // File writing logic here
-                BufferedWriter landWriter = null;
-                BufferedWriter waterWriter = null;
-                try {
-                    landWriter = new BufferedWriter(new FileWriter(landFile, true));
+                if (isPrevBlockUnderwater && prevWaterBiome != null && prevWaterLocation != null) {
+                    int prevWaterBiomeId = biomeMap.getOrDefault(prevWaterBiome.toString(), 0);
+                    sbWater.append(prevWaterLocation.getBlockX())
+                            .append(",")
+                            .append(prevWaterLocation.getBlockY())
+                            .append(",")
+                            .append(prevWaterLocation.getBlockZ())
+                            .append(",")
+                            .append(prevWaterBiomeId)
+                            .append(",")
+                            .append(repeatedWaterBlockCount)
+                            .append("\n");
+                }
+
+                try (BufferedWriter landWriter = new BufferedWriter(new FileWriter(landFile, true));
+                     BufferedWriter waterWriter = new BufferedWriter(new FileWriter(waterFile, true))) {
+
                     landWriter.write(initData);
-                    landWriter.flush();
                     landWriter.write(sbLand.toString());
-                    landWriter.flush();
 
-                    waterWriter = new BufferedWriter(new FileWriter(waterFile, true));
                     waterWriter.write(sbWater.toString());
-                    waterWriter.flush();
-
                 } catch (IOException ignored) {}
 
                 sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d)));
@@ -480,10 +476,8 @@ public final class MinePath extends JavaPlugin {
                 File zipOutputFile = new File(getDataFolder(), zipOutputPath);
                 createFile(zipOutputFile);
                 if (isFinalWorldFile) {
-                    try {
-                        ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile));
+                    try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile))) {
                         byte[] bytes = new byte[65536];
-
                         File[] files = getDataFolder().listFiles();
 
                         if (files != null) {
@@ -499,7 +493,7 @@ public final class MinePath extends JavaPlugin {
                                         else if (fileName.startsWith("world-")) {
                                             String[] splitFileName = fileName.split("-");
                                             String worldName = String.join("-", Arrays.copyOfRange(splitFileName, 1, splitFileName.length - 1));
-                                            sbPath.append("world/").append(worldName).append("/");
+                                            sbPath.append("worlds/").append(worldName).append("/");
                                         }
 
                                         ZipEntry entry = new ZipEntry(sbPath.toString() + file.getName());
@@ -511,7 +505,6 @@ public final class MinePath extends JavaPlugin {
                                                 out.write(bytes, 0, length);
                                             }
                                         }
-
                                         out.closeEntry();
                                     }
                                     String filePath = file.getAbsolutePath();
@@ -523,13 +516,11 @@ public final class MinePath extends JavaPlugin {
                                     }
                                 }
                             }
-                            out.close();
                             sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All Processes have now been complete! Your data is now ready.");
                         }
                     } catch (IOException ignored) {
-                        sendToOperators(ChatColor.BOLD + "" + ChatColor.RED + "[MINEPATH] An error has occurred compress your data");
+                        sendToOperators(ChatColor.BOLD + "" + ChatColor.RED + "[MINEPATH] An error has occurred compressing your data");
                     }
-
                 }
             }
         });
