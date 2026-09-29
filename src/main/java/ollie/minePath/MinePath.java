@@ -376,10 +376,12 @@ public final class MinePath extends JavaPlugin {
                                     waterLocation = blockLocation;
                                 }
 
-                                if (isPrevBlockUnderwater && isBlockUnderwater) {
+                                boolean isSameRun = isPrevBlockUnderwater && isBlockUnderwater && blockLocation.getBlockY() == prevWaterLocation.getBlockY() && blockLocation.getBlockZ() == prevWaterLocation.getBlockZ() && biome.equals(prevWaterBiome);
+
+                                if (isSameRun) {
                                     repeatedWaterBlockCount++;
                                 }
-                                else if (isPrevBlockUnderwater && !isBlockUnderwater) {
+                                else {
                                     if (prevWaterBiome == null) {
 
                                     } else {
