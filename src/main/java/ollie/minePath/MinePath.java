@@ -343,30 +343,24 @@ public final class MinePath extends JavaPlugin {
                 Biome prevWaterBiome = null;
 
                 for (ChunkSnapshot[] chunkRow: chunkSnapshots) {
-                    for (int z = 0; z < 16; z++)
-                        for (ChunkSnapshot chunk: chunkRow) {
-                            int chunkZ = chunk.getZ() * 16;
+                    for (ChunkSnapshot chunk : chunkRow) {
+                        int chunkZ = chunk.getZ() * 16;
+                        int chunkX = chunk.getX() * 16;
 
+                        for (int z = 0; z < 16; z++) {
                             int worldZ = chunkZ + z;
-
-                            if (minZ > worldZ || maxZ < worldZ)
-                                continue;
-
-                            int chunkX = chunk.getX() * 16;
+                            if (minZ > worldZ || maxZ < worldZ) continue;
 
                             for (int x = 0; x < 16; x++) {
                                 int worldX = chunkX + x;
-
-                                if (minX > worldX || maxX < worldX)
-                                    continue;
+                                if (minX > worldX || maxX < worldX) continue;
 
                                 BlockInfo blockInfo = getHighestValidNonWaterBlockData(x, z, chunk, world);
                                 int y = blockInfo.y();
 
-//                                Block block = world.getBlockAt(worldX, y, worldZ);
-                                Material mat = chunk.getBlockType(x,y,z);
-                                Biome biome = chunk.getBiome(x,y,z);
-                                Location blockLocation = new Location(world, worldX,y,worldZ);
+                                Material mat = chunk.getBlockType(x, y, z);
+                                Biome biome = chunk.getBiome(x, y, z);
+                                Location blockLocation = new Location(world, worldX, y, worldZ);
 
 
                                 boolean isBlockUnderwater = blockInfo.isUnderwater();
@@ -381,8 +375,7 @@ public final class MinePath extends JavaPlugin {
 
                                 if (isSameRun) {
                                     repeatedWaterBlockCount++;
-                                }
-                                else {
+                                } else {
                                     if (prevWaterBiome == null) {
 
                                     } else {
@@ -407,8 +400,7 @@ public final class MinePath extends JavaPlugin {
                                     prevBiome = biome;
                                     prevLocation = blockLocation;
                                     repeatedBlockCount = 1;
-                                }
-                                else if (prevBlockMat != mat || prevBiome != biome) { // if prevBlock != current Block (stop RLE)
+                                } else if (prevBlockMat != mat || prevBiome != biome) { // if prevBlock != current Block (stop RLE)
                                     if (prevBiome == null) {
 
                                     } else {
@@ -416,13 +408,13 @@ public final class MinePath extends JavaPlugin {
                                         int prevBiomeId = biomeMap.get(prevBiome.toString());
 
                                         sbLand.append(prevBlockMatId)
-                                                    .append(",")
-                                                    .append(prevLocation.getBlockY())
-                                                    .append(",")
-                                                    .append(prevBiomeId)
-                                                    .append(",")
-                                                    .append(repeatedBlockCount)
-                                                    .append("\n");
+                                                .append(",")
+                                                .append(prevLocation.getBlockY())
+                                                .append(",")
+                                                .append(prevBiomeId)
+                                                .append(",")
+                                                .append(repeatedBlockCount)
+                                                .append("\n");
                                         repeatedBlockCount = 1;
                                     }
                                 } else {
@@ -439,31 +431,32 @@ public final class MinePath extends JavaPlugin {
                                 }
                             }
                         }
-                }
+                    }
 
-                int prevBlockMatId = blockMap.get(prevBlockMat);
-                int prevBiomeId = biomeMap.get(prevBiome.toString());
+                    int prevBlockMatId = blockMap.get(prevBlockMat);
+                    int prevBiomeId = biomeMap.get(prevBiome.toString());
 
-                sbLand.append(prevBlockMatId)
-                        .append(",")
-                        .append(prevLocation.getY())
-                        .append(",")
-                        .append(prevBiomeId)
-                        .append(",")
-                        .append(repeatedBlockCount)
-                        .append("\n");
+                    sbLand.append(prevBlockMatId)
+                            .append(",")
+                            .append(prevLocation.getY())
+                            .append(",")
+                            .append(prevBiomeId)
+                            .append(",")
+                            .append(repeatedBlockCount)
+                            .append("\n");
 
-                if (isPrevBlockUnderwater) {
-                    int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
-                    sbWater.append(prevLocation.getBlockX())
-                            .append(",")
-                            .append(prevLocation.getBlockY())
-                            .append(",")
-                            .append(prevLocation.getBlockZ())
-                            .append(",")
-                            .append(prevWaterBiomeId)
-                            .append(",")
-                            .append(repeatedWaterBlockCount);
+                    if (isPrevBlockUnderwater) {
+                        int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
+                        sbWater.append(prevLocation.getBlockX())
+                                .append(",")
+                                .append(prevLocation.getBlockY())
+                                .append(",")
+                                .append(prevLocation.getBlockZ())
+                                .append(",")
+                                .append(prevWaterBiomeId)
+                                .append(",")
+                                .append(repeatedWaterBlockCount);
+                    }
                 }
 
                 // File writing logic here
