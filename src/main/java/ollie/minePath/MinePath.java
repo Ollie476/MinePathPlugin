@@ -296,6 +296,14 @@ public final class MinePath extends JavaPlugin {
         }
     }
 
+    private int getWaterSurfaceY(int localX, int localZ, ChunkSnapshot chunk, int startY) {
+        for (int y = startY; y >= 0; y--) {
+            if (chunk.getBlockType(localX, y, localZ) == Material.WATER) {
+                return y;
+            }
+        }
+        return 62;
+    }
 
     public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ, boolean isFinalWorldFile) throws IOException {
         long startTime = System.nanoTime();
@@ -368,17 +376,25 @@ public final class MinePath extends JavaPlugin {
                         boolean isBlockUnderwater = blockInfo.isUnderwater();
                         Biome waterBiome = null;
                         Location waterLocation = null;
-                        if (!isPrevBlockUnderwater && isBlockUnderwater) {
+
+                        if (isBlockUnderwater) {
                             waterBiome = biome;
-                            waterLocation = blockLocation;
+                            int waterSurfaceY = getWaterSurfaceY(localX, localZ, chunk, 63);
+                            waterLocation = new Location(world, worldX, waterSurfaceY, worldZ);
                         }
 
-                        if (isPrevBlockUnderwater && isBlockUnderwater) {
+                        boolean isValidWaterForRLE = isPrevBlockUnderwater && isBlockUnderwater
+                                && prevWaterLocation != null
+                                && blockLocation.getBlockY() == prevWaterLocation.getBlockY()
+                                && blockLocation.getBlockZ() == prevWaterLocation.getBlockZ()
+                                && prevWaterBiome == biome;
+
+                        if (isValidWaterForRLE) {
                             repeatedWaterBlockCount++;
                         }
-                        else if (isPrevBlockUnderwater && !isBlockUnderwater) {
-                            if (prevWaterBiome != null) {
-                                int prevWaterBiomeId = biomeMap.get(prevWaterBiome.toString());
+                        else {
+                            if (prevWaterBiome != null && prevWaterLocation != null) {
+                                int prevWaterBiomeId = biomeMap.getOrDefault(prevWaterBiome.toString(), 0);
 
                                 sbWater.append(prevWaterLocation.getBlockX())
                                         .append(",")
@@ -390,7 +406,15 @@ public final class MinePath extends JavaPlugin {
                                         .append(",")
                                         .append(repeatedWaterBlockCount)
                                         .append("\n");
-                                repeatedWaterBlockCount = 1;
+                            }
+
+                            repeatedWaterBlockCount = 1;
+                            if (isBlockUnderwater) {
+                                prevWaterBiome = biome;
+                                prevWaterLocation = waterLocation;
+                            } else {
+                                prevWaterBiome = null;
+                                prevWaterLocation = null;
                             }
                         }
 
@@ -401,7 +425,7 @@ public final class MinePath extends JavaPlugin {
                             prevLocation = blockLocation;
                             repeatedBlockCount = 1;
                         }
-                        // Break RLE sequence if Material, Biome, OR Height (Y) changes!
+
                         else if (prevBlockMat != mat || prevBiome != biome || prevY != y) {
                             if (prevBiome != null) {
                                 int prevBlockMatId = blockMap.getOrDefault(prevBlockMat, 1);
@@ -426,11 +450,6 @@ public final class MinePath extends JavaPlugin {
                         }
 
                         isPrevBlockUnderwater = blockInfo.isUnderwater();
-
-                        if (waterBiome != null) {
-                            prevWaterBiome = waterBiome;
-                            prevWaterLocation = waterLocation;
-                        }
                     }
                 }
 
