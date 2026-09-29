@@ -363,6 +363,7 @@ public final class MinePath extends JavaPlugin {
                                 BlockInfo blockInfo = getHighestValidNonWaterBlockData(x, z, chunk, world);
                                 int y = blockInfo.y();
 
+//                                Block block = world.getBlockAt(worldX, y, worldZ);
                                 Material mat = chunk.getBlockType(x,y,z);
                                 Biome biome = chunk.getBiome(x,y,z);
                                 Location blockLocation = new Location(world, worldX,y,worldZ);
@@ -505,7 +506,7 @@ public final class MinePath extends JavaPlugin {
                                         else if (fileName.startsWith("world-")) {
                                             String[] splitFileName = fileName.split("-");
                                             String worldName = String.join("-", Arrays.copyOfRange(splitFileName, 1, splitFileName.length - 1));
-                                            sbPath.append("worlds/").append(worldName).append("/");
+                                            sbPath.append("world/").append(worldName).append("/");
                                         }
 
                                         ZipEntry entry = new ZipEntry(sbPath.toString() + file.getName());
