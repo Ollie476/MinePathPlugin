@@ -16,6 +16,7 @@ import org.bukkit.scoreboard.Team;
 
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -25,6 +26,8 @@ record BiomeBlockInfo(BlockData data, int y, Biome biome) {}
 public final class MinePath extends JavaPlugin {
     public long snapshotDelay;
     public long snapshotIndex;
+
+    final JavaPlugin plugin = this;
 
     private final String recordingDataPath = "snapshots.csv";
     private final String teamMapPath = "team-map.csv";
@@ -174,15 +177,19 @@ public final class MinePath extends JavaPlugin {
                         teamIndex = teamMap.get(playerTeam);
                     }
 
+                    Location playerLocation = player.getLocation();
+
                     fileAdditions.append(snapshotIndex)
                             .append(",")
                             .append(uuidMap.get(player.getUniqueId()))
                             .append(",")
-                            .append(Math.round(player.getLocation().getX() * 10))
+                            .append(Math.round(playerLocation.getX() * 10))
                             .append(",")
-                            .append(Math.round(player.getLocation().getY() * 10))
+                            .append(Math.round(playerLocation.getY() * 10))
                             .append(",")
-                            .append(Math.round(player.getLocation().getZ() * 10))
+                            .append(Math.round(playerLocation.getZ() * 10))
+                            .append(",")
+                            .append(Math.round(playerLocation.getYaw()))
                             .append(",")
                             .append(worldMap.get(worldName))
                             .append(",")
@@ -196,7 +203,7 @@ public final class MinePath extends JavaPlugin {
                     if (playerBounds.get(worldName) == null)
                         playerBounds.put(worldName, new ArrayList<>());
 
-                    playerBounds.get(worldName).add(player.getLocation());
+                    playerBounds.get(worldName).add(playerLocation);
                 }
 
                 try {
@@ -216,43 +223,11 @@ public final class MinePath extends JavaPlugin {
             saveConfig();
 
             sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] Successfully stopped the recorder");
-            addToCSVFile(teamMapPath, "", false);
-            uuidMap.entrySet().stream() // UUID map file
-                    .sorted(Map.Entry.comparingByValue())
-                    .forEach(uuidEntry-> {
-                        String key = uuidEntry.getKey().toString();
-                        Integer value = uuidEntry.getValue();
-                        try {
-                            addToCSVFile(UUIDMapPath, value + "," + Bukkit.getOfflinePlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
-                        } catch (IOException ignore) {}
-                    });
-
-            addToCSVFile(teamMapPath, "0,~\n", false); // base team
-
-            teamMap.entrySet().stream()
-                    .sorted(Map.Entry.comparingByValue())
-                    .forEach(teamEntry -> {
-                        String key = teamEntry.getKey().getName();
-                        Integer value = teamEntry.getValue();
-
-                        try {
-                            addToCSVFile(teamMapPath, value + "," + key + "," + teamEntry.getKey().getColor().name().toLowerCase() + "\n", true);
-                        } catch (IOException ignore) {}
-                    });
-
-            addToCSVFile(worldMapPath,"",false);
-            worldMap.entrySet().stream().sorted(Map.Entry.comparingByValue()).forEach(worldEntry -> {
-                String key = worldEntry.getKey();
-                Integer value = worldEntry.getValue();
-
-                try {
-                    addToCSVFile(worldMapPath, value + "," + key + "\n", true);
-                } catch (IOException ignore) {}
-
-            });
 
             int worldAmount = playerBounds.size();
             int worldCount = 0;
+
+            List<CompletableFuture<String>> worldTaskList = new ArrayList<CompletableFuture<String>>();
 
             for (String worldName : playerBounds.keySet()) {
                 World world = Bukkit.getWorld(worldName);
@@ -271,8 +246,10 @@ public final class MinePath extends JavaPlugin {
                 if (minZ == maxZ && minX == maxX)
                     continue;
 
-                if (world != null)
-                    makeMapFile(world, minX, minZ, maxX, maxZ, worldAmount == worldCount+1);
+                if (world != null) {
+                    CompletableFuture<String> worldTask = getWorldTask(world, minX, minZ, maxX, maxZ, worldAmount == worldCount+1);
+                    worldTaskList.add(worldTask);
+                }
 
                 sendToOperators("---- " + worldName + " ----");
                 sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] TopLeft: (" + minX + ", " + minZ + ")");
@@ -285,6 +262,115 @@ public final class MinePath extends JavaPlugin {
 
             playerBounds.clear();
 
+            CompletableFuture<Void> allWorldTasks = CompletableFuture.allOf(worldTaskList.toArray(new CompletableFuture[0]));
+
+            allWorldTasks.thenRunAsync(() -> {
+                List<String> completionMessages = worldTaskList.stream()
+                        .map(CompletableFuture::join)
+                        .toList();
+
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    MinePath minepathPlugin = (MinePath) plugin;
+                    for (String completionMessage : completionMessages) {
+                        minepathPlugin.sendToOperators(completionMessage);
+                    }
+
+                    try {
+                        minepathPlugin.addToCSVFile(teamMapPath, "", false);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                    uuidMap.entrySet().stream() // UUID map file
+                            .sorted(Map.Entry.comparingByValue())
+                            .forEach(uuidEntry-> {
+                                String key = uuidEntry.getKey().toString();
+                                Integer value = uuidEntry.getValue();
+                                try {
+                                    addToCSVFile(UUIDMapPath, value + "," + Bukkit.getOfflinePlayer(uuidEntry.getKey()).getName() + "," + key + "\n", true);
+                                } catch (IOException ignore) {}
+                            });
+
+                    try {
+                        minepathPlugin.addToCSVFile(teamMapPath, "0,~\n", false); // base team
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    teamMap.entrySet().stream()
+                            .sorted(Map.Entry.comparingByValue())
+                            .forEach(teamEntry -> {
+                                String key = teamEntry.getKey().getName();
+                                Integer value = teamEntry.getValue();
+
+                                try {
+                                    addToCSVFile(teamMapPath, value + "," + key + "," + teamEntry.getKey().getColor().name().toLowerCase() + "\n", true);
+                                } catch (IOException ignore) {}
+                            });
+
+                    try {
+                        minepathPlugin.addToCSVFile(worldMapPath,"",false);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                    worldMap.entrySet().stream().sorted(Map.Entry.comparingByValue()).forEach(worldEntry -> {
+                        String key = worldEntry.getKey();
+                        Integer value = worldEntry.getValue();
+
+                        try {
+                            addToCSVFile(worldMapPath, value + "," + key + "\n", true);
+                        } catch (IOException ignore) {}
+
+                    });
+
+                    File zipOutputFile = new File(getDataFolder(), zipOutputPath);
+                    createFile(zipOutputFile);
+                    try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile))) {
+                        byte[] bytes = new byte[65536];
+                        File[] files = getDataFolder().listFiles();
+
+                        if (files != null) {
+                            for (File file : files) {
+                                if (file.isFile()) {
+                                    String fileName = file.getName();
+                                    if (!fileName.equals(zipOutputPath)) {
+                                        StringBuilder sbPath = new StringBuilder();
+
+                                        if (fileName.endsWith("-map.csv")) {
+                                            sbPath.append("maps/");
+                                        } else if (fileName.startsWith("world-")) {
+                                            String[] splitFileName = fileName.split("-");
+                                            String worldName = String.join("-", Arrays.copyOfRange(splitFileName, 1, splitFileName.length - 1));
+                                            sbPath.append("worlds/").append(worldName).append("/");
+                                        }
+
+                                        ZipEntry entry = new ZipEntry(sbPath.toString() + file.getName());
+                                        out.putNextEntry(entry);
+
+                                        try (FileInputStream in = new FileInputStream(file)) {
+                                            int length;
+                                            while ((length = in.read(bytes)) >= 0) {
+                                                out.write(bytes, 0, length);
+                                            }
+                                        }
+                                        out.closeEntry();
+                                    }
+                                    String filePath = file.getAbsolutePath();
+
+                                    if (filePath.endsWith(".csv")) {
+                                        if (!file.delete()) {
+                                            getLogger().warning("Failed to delete: " + filePath);
+                                        }
+                                    }
+                                }
+                            }
+                            minepathPlugin.sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All Processes have now been complete! Your data is now ready.");
+                        }
+                    }
+                    catch (IOException ignored) {
+                        minepathPlugin.sendToOperators(ChatColor.BOLD + "" + ChatColor.RED + "[MINEPATH] An error has occurred compressing your data");
+                    }
+                });
+            });
         }
     }
 
@@ -305,7 +391,7 @@ public final class MinePath extends JavaPlugin {
         return 62;
     }
 
-    public void makeMapFile(World world, int minX, int minZ, int maxX, int maxZ, boolean isFinalWorldFile) throws IOException {
+    public CompletableFuture<String> getWorldTask(World world, int minX, int minZ, int maxX, int maxZ, boolean isFinalWorldFile) throws IOException {
         long startTime = System.nanoTime();
 
         int minChunkZ = minZ >> 4;
@@ -338,9 +424,7 @@ public final class MinePath extends JavaPlugin {
 
         String initData = minX + "|" + minZ + "," + maxX + "|" + maxZ + "\n";
 
-        Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
-            @Override
-            public void run() {
+        CompletableFuture<String> task = CompletableFuture.supplyAsync(() -> {
                 StringBuilder sbLand = new StringBuilder();
                 StringBuilder sbWater = new StringBuilder();
 
@@ -490,59 +574,9 @@ public final class MinePath extends JavaPlugin {
                     waterWriter.write(sbWater.toString());
                 } catch (IOException ignored) {}
 
-                sendToOperators(String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d)));
-
-                File zipOutputFile = new File(getDataFolder(), zipOutputPath);
-                createFile(zipOutputFile);
-                if (isFinalWorldFile) {
-                    try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(zipOutputFile))) {
-                        byte[] bytes = new byte[65536];
-                        File[] files = getDataFolder().listFiles();
-
-                        if (files != null) {
-                            for (File file : files) {
-                                if (file.isFile()) {
-                                    String fileName = file.getName();
-                                    if (!fileName.equals(zipOutputPath)) {
-                                        StringBuilder sbPath = new StringBuilder();
-
-                                        if (fileName.endsWith("-map.csv")) {
-                                            sbPath.append("maps/");
-                                        }
-                                        else if (fileName.startsWith("world-")) {
-                                            String[] splitFileName = fileName.split("-");
-                                            String worldName = String.join("-", Arrays.copyOfRange(splitFileName, 1, splitFileName.length - 1));
-                                            sbPath.append("worlds/").append(worldName).append("/");
-                                        }
-
-                                        ZipEntry entry = new ZipEntry(sbPath.toString() + file.getName());
-                                        out.putNextEntry(entry);
-
-                                        try (FileInputStream in = new FileInputStream(file)) {
-                                            int length;
-                                            while ((length = in.read(bytes)) >= 0) {
-                                                out.write(bytes, 0, length);
-                                            }
-                                        }
-                                        out.closeEntry();
-                                    }
-                                    String filePath = file.getAbsolutePath();
-
-                                    if (filePath.endsWith(".csv")) {
-                                        if (!file.delete()) {
-                                            getLogger().warning("Failed to delete: " + filePath);
-                                        }
-                                    }
-                                }
-                            }
-                            sendToOperators(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All Processes have now been complete! Your data is now ready.");
-                        }
-                    } catch (IOException ignored) {
-                        sendToOperators(ChatColor.BOLD + "" + ChatColor.RED + "[MINEPATH] An error has occurred compressing your data");
-                    }
-                }
-            }
+                return String.format(ChatColor.BOLD + "" + ChatColor.GOLD + "[MINEPATH] All processes have been completed for {%s}, took %.3f second(s)", world.getName(), ((System.nanoTime() - startTime) / 1_000_000_000d));
         });
+        return task;
     }
 
 
@@ -569,7 +603,7 @@ public final class MinePath extends JavaPlugin {
         }
     }
 
-    private void sendToOperators(String message) {
+    public void sendToOperators(String message) {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.isOp())
                 player.sendMessage(message);
